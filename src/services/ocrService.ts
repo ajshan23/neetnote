@@ -3,7 +3,7 @@ import Tesseract from "tesseract.js";
 import { Mistral } from "@mistralai/mistralai";
 import fs from "fs";
 
-const mistralClient = new Mistral({ apiKey: "Zg5f3MlW5tMDlQx7OjrKRIWv32O3JaL6"});
+const mistralClient = new Mistral({ apiKey: process.env.MISTRAL_KEY});
 
 export const extractTextFromScreenshot = async (filePath: string): Promise<string> => {
   const { data } = await Tesseract.recognize(filePath, "eng");

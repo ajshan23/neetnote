@@ -4,7 +4,7 @@ export interface IPost extends Document {
   title: string;
   content: string;
   author: Types.ObjectId;
-  imageUrl?: string;
+  imageUrl?: string[];
   tags: string[];
   isPublic: boolean;
   createdAt: Date;
@@ -28,10 +28,10 @@ const PostSchema = new Schema<IPost>({
     ref: 'User',
     required: true
   },
-  imageUrl: {
+  imageUrl: [{
     type: String,
     required: false
-  },
+  }],
   tags: [{
     type: String,
     trim: true

@@ -1,30 +1,73 @@
-import { Schema, model, Document } from 'mongoose';
-
+import { Schema, model, Document, Types } from 'mongoose';
 
 export enum Subject {
   PHYSICS = 'physics',
-  CHEMISTRY = 'chemistry',
+  CHEMISTRY = 'chemistry', 
   BIOLOGY = 'biology'
 }
 
 export interface IDailyTask extends Document {
+  title: string; // Added title field
   date: Date;
   subject: Subject;
-  quiz: Schema.Types.ObjectId;
+  contextText: string;
+  contextEmbedding: number[];
   isActive: boolean;
+  isAiGenerated: boolean;
+  createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const DailyTaskSchema = new Schema<IDailyTask>({
-  date: { type: Date, required: true, unique: true },
+  title: { 
+    type: String, 
+    required: true,
+    trim: true,
+    maxlength: 200
+  },
+  date: { 
+    type: Date, 
+    required: true,
+    index: true
+  },
   subject: { 
     type: String, 
     enum: Object.values(Subject),
     required: true 
   },
-  quiz: { type: Schema.Types.ObjectId, ref: 'Quiz', required: true },
-  isActive: { type: Boolean, default: true }
-}, { timestamps: true });
+  contextText: { 
+    type: String, 
+    required: true 
+  },
+  contextEmbedding: { 
+    type: [Number], 
+    required: true 
+  },
+  isActive: { 
+    type: Boolean, 
+    default: true 
+  },
+  isAiGenerated: { 
+    type: Boolean, 
+    default: false 
+  },
+  createdBy: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'User',
+    required: true 
+  }
+}, { 
+  timestamps: true 
+});
+
+// Compound index for daily tasks
+DailyTaskSchema.index({ 
+  date: 1, 
+  subject: 1 
+}, { 
+  unique: true,
+  partialFilterExpression: { isActive: true }
+});
 
 export default model<IDailyTask>('DailyTask', DailyTaskSchema);

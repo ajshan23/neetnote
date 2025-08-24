@@ -6,53 +6,168 @@ import Like from '../models/Like';
 import Bookmark from '../models/Bookmark';
 import { ApiResponse } from '../dto/ApiResponse';
 import { Types } from 'mongoose';
+import { uploadToS3 } from '../services/s3Service';
+import fs from 'fs';
+import { promisify } from 'util';
+const unlinkAsync = promisify(fs.unlink);
 
 /**
- * Create a new post
+ * Create a new post with multiple images
  */
 export const createPost = async (req: Request, res: Response) => {
+  const filesToCleanup: string[] = [];
+  
   try {
-    const { title, content, imageUrl, tags, isPublic } = req.body;
+    console.log(req.body);
+    console.log('Request files:', req.files);
+    const { title, content, tags, isPublic } = req.body;
+    
     const author = (req as any).user.id;
 
+    // Validate required fields
+    if (!title || !content) {
+      return res.status(400).json(new ApiResponse(false, 'Title and content are required'));
+    }
+
+    let imageUrls: string[] = [];
+
+    // Process uploaded images if any
+    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+      const files = req.files as Express.Multer.File[];
+      
+      // Store file paths for cleanup
+      files.forEach(file => {
+        if (file.path) {
+          filesToCleanup.push(file.path);
+        }
+      });
+
+      // Upload each image to S3
+      for (const file of files) {
+        try {
+          const url = await uploadToS3(
+            file.path, 
+            "your-bucket-name", // Replace with your bucket name
+            `post-images/${Date.now()}-${file.originalname}`
+          );
+          imageUrls.push(url);
+          console.log(`Uploaded image to: ${url}`);
+        } catch (uploadError: any) {
+          console.error('Error uploading image:', uploadError);
+          // Continue with other images even if one fails
+        }
+      }
+    }
+
+    // Create post
     const post = new Post({
       title,
       content,
       author,
-      imageUrl,
-      tags,
-      isPublic: isPublic !== undefined ? isPublic : true
+      imageUrl: imageUrls,
+      tags: tags ? JSON.parse(tags) : [],
+      isPublic: isPublic !== undefined ? isPublic === 'true' : true
     });
 
     await post.save();
     await post.populate('author', 'name email');
 
+    // Clean up temporary files
+    try {
+      await Promise.all(filesToCleanup.map(filePath => 
+        unlinkAsync(filePath).catch(e => console.error(`Error deleting ${filePath}:`, e))
+      ));
+      console.log('Temporary files cleaned up successfully');
+    } catch (cleanupError) {
+      console.error('Error during file cleanup:', cleanupError);
+    }
+
     res.status(201).json(new ApiResponse(true, 'Post created successfully', post));
   } catch (error: any) {
+    // Attempt to clean up files even if there's an error
+    try {
+      await Promise.all(filesToCleanup.map(filePath => 
+        unlinkAsync(filePath).catch(e => console.error(`Error deleting ${filePath}:`, e))
+      ));
+      console.log('Attempted to clean up temporary files after error');
+    } catch (cleanupError) {
+      console.error('Error during file cleanup after failure:', cleanupError);
+    }
+
     console.error('Create post error:', error);
     res.status(500).json(new ApiResponse(false, 'Failed to create post'));
   }
 };
 
+
 /**
- * Get all posts (with pagination)
+ * Get all posts (with pagination) including like counts, comment counts, and user interaction status
  */
 export const getPosts = async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
     const skip = (page - 1) * limit;
+    const userId = (req as any).user?.id; // Optional - user might not be authenticated
 
     const posts = await Post.find({ isPublic: true })
-      .populate('author', 'name email')
+      .populate('author', 'name email profilePicture')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
     const total = await Post.countDocuments({ isPublic: true });
 
+    // Get all post IDs for batch queries
+    const postIds = posts.map(post => post._id);
+
+    // Get like counts for all posts in batch
+    const likeCounts = await Like.aggregate([
+      { $match: { post: { $in: postIds } } },
+      { $group: { _id: '$post', count: { $sum: 1 } } }
+    ]);
+
+    // Get comment counts for all posts in batch
+    const commentCounts = await Comment.aggregate([
+      { $match: { post: { $in: postIds } } },
+      { $group: { _id: '$post', count: { $sum: 1 } } }
+    ]);
+
+    // Get user's likes and bookmarks if authenticated
+    let userLikes: any=[];
+    let userBookmarks: Types.ObjectId[] = [];
+
+    if (userId) {
+      userLikes = (await Like.find({ user: userId, post: { $in: postIds } }))
+        .map(like => like.post);
+      
+      userBookmarks = (await Bookmark.find({ user: userId, post: { $in: postIds } }))
+        .map(bookmark => bookmark.post);
+    }
+
+    // Create maps for efficient lookup
+    const likeCountMap = new Map();
+    likeCounts.forEach(item => likeCountMap.set(item._id.toString(), item.count));
+
+    const commentCountMap = new Map();
+    commentCounts.forEach(item => commentCountMap.set(item._id.toString(), item.count));
+
+    // Enhance posts with additional data
+    const enhancedPosts = posts.map(post => {
+    
+      const postIdStr =( post._id as any).toString()
+      
+      return {
+        ...post.toObject(),
+        likeCount: likeCountMap.get(postIdStr) || 0,
+        commentCount: commentCountMap.get(postIdStr) || 0,
+        isLiked: userId ? userLikes.some((likeId:any )=> likeId.toString() === postIdStr) : false,
+        isBookmarked: userId ? userBookmarks.some(bookmarkId => bookmarkId.toString() === postIdStr) : false
+      };
+    });
+
     res.status(200).json(new ApiResponse(true, 'Posts fetched successfully', {
-      posts,
+      posts: enhancedPosts,
       pagination: {
         page,
         limit,

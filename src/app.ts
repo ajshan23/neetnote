@@ -4,6 +4,15 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import routes from './routes/index';
 import { notFound, errorHandler } from './middlewares/error';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables from .env file
+dotenv.config();
+
+// Determine which .env file to load based on NODE_ENV
+const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env';
+dotenv.config({ path: path.resolve(process.cwd(), envFile) });
 
 
 const app = express();
